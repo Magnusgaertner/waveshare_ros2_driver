@@ -1,16 +1,16 @@
 <?xml version="1.0" ?>
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
-  <name>feetech_ros2_driver</name>
+  <name>waveshare_ros2_driver</name>
   <version>0.1.0</version>
-  <description>ros2_control hardware interface for Feetech Servos</description>
-  <maintainer email="jafar.uruc@gmail.com">Jafar Uruc</maintainer>
+  <description>ros2_control hardware interface for Waveshare Servos</description>
+  <maintainer email="magnusgaertner@gmail.com">Magnus Gaertner</maintainer>
   <license>BSD</license>
-  <url type="website">https://github.com/JafarAbdi/feetech_ros2_driver</url>
+  <url type="website">https://github.com/Magnusgaertner/waveshare_ros2_driver</url>
   <url type="bugtracker">
-    https://github.com/JafarAbdi/feetech_ros2_driver/issues
+    https://github.com/Magnusgaertner/waveshare_ros2_driver/issues
   </url>
-  <url type="repository">https://github.com/JafarAbdi/feetech_ros2_driver/</url>
+  <url type="repository">https://github.com/Magnusgaertner/waveshare_ros2_driver.git</url>
   <buildtool_depend>ament_cmake</buildtool_depend>
   <depend>rclcpp</depend>
   <depend>hardware_interface</depend>
