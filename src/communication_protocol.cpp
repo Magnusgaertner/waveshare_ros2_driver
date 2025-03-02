@@ -1,12 +1,12 @@
-#include <feetech_hardware_interface/SMS_STS.h>
+#include <waveshare_hardware_interface/SMS_STS.h>
 #include <fmt/ranges.h>
 #include <spdlog/spdlog.h>
 
 #include <cstddef>
-#include <feetech_hardware_interface/common.hpp>
-#include <feetech_hardware_interface/communication_protocol.hpp>
+#include <waveshare_hardware_interface/common.hpp>
+#include <waveshare_hardware_interface/communication_protocol.hpp>
 
-namespace feetech_hardware_interface {
+namespace waveshare_hardware_interface {
 
 CommunicationProtocol::CommunicationProtocol(std::unique_ptr<SerialPort> serial_port)
     : serial_port_(std::move(serial_port)) {}
@@ -147,4 +147,4 @@ Result CommunicationProtocol::reg_write_action(const uint8_t id) {
 }
 
 Expected<int> CommunicationProtocol::read_model_number(uint8_t id) { return read_word(id, SMS_STS_MODEL_L); }
-}  // namespace feetech_hardware_interface
+}  // namespace waveshare_hardware_interface

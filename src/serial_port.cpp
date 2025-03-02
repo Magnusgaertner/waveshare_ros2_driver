@@ -1,9 +1,9 @@
 #include <spdlog/spdlog.h>
 
-#include <feetech_hardware_interface/serial_port.hpp>
+#include <waveshare_hardware_interface/serial_port.hpp>
 #include <tl_expected/expected.hpp>
 
-namespace feetech_hardware_interface {
+namespace waveshare_hardware_interface {
 
 Expected<LibSerial::BaudRate> to_baudrate(const std::size_t baud) noexcept {
   using LibSerial::BaudRate;
@@ -152,4 +152,4 @@ Result SerialPort::flashOutputBuffer() noexcept {
 
   return {};
 }
-}  // namespace feetech_hardware_interface
+}  // namespace waveshare_hardware_interface

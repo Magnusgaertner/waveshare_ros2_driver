@@ -4,11 +4,11 @@
 #include <libserial/SerialPort.h>
 
 #include <chrono>
-#include <feetech_hardware_interface/common.hpp>
+#include <waveshare_hardware_interface/common.hpp>
 #include <range/v3/all.hpp>
 #include <string>
 
-namespace feetech_hardware_interface {
+namespace waveshare_hardware_interface {
 
 class SerialPort {
  public:
@@ -60,4 +60,4 @@ class SerialPort {
   std::chrono::milliseconds timeout_ = std::chrono::milliseconds(10);
   LibSerial::SerialPort port_;
 };
-}  // namespace feetech_hardware_interface
+}  // namespace waveshare_hardware_interface

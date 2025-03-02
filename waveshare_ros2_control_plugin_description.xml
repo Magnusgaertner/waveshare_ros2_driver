@@ -1,0 +1,10 @@
+<?xml version="1.0" ?>
+<library path="waveshare_ros2_driver">
+  <class
+    name="waveshare_ros2_driver/WaveshareHardwareInterface"
+    type="waveshare_ros2_driver::WaveshareHardwareInterface"
+    base_class_type="hardware_interface::SystemInterface"
+  >
+    <description>Waveshare Hardware Interface</description>
+  </class>
+</library>

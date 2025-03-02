@@ -4,7 +4,7 @@
 
 To make sure you have the latest repos:
 
-      cd $COLCON_WS/src/feetech_ros2_driver
+      cd $COLCON_WS/src/waveshare_ros2_driver
       git checkout main
       git pull origin main
       cd $COLCON_WS/src
@@ -28,7 +28,7 @@ pre-commit install
 
 ## Testing and Linting
 
-To test the packages in feetech_ros2_driver, use the following command with [colcon](https://colcon.readthedocs.io/en/released/).
+To test the packages in waveshare_ros2_driver, use the following command with [colcon](https://colcon.readthedocs.io/en/released/).
 
     export TEST_PACKAGES="PROJECT_PACKAGE_NAMES"
     colcon build --packages-up-to ${TEST_PACKAGES}

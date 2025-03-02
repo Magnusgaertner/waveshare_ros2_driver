@@ -2,7 +2,7 @@
 
 ## ros2_control urdf tag
 
-The feetech system interface has a few `ros2_control` urdf tags to customize its behavior.
+The waveshare system interface has a few `ros2_control` urdf tags to customize its behavior.
 
 #### Parameters
 

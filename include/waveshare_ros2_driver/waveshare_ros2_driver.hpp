@@ -1,7 +1,7 @@
 #pragma once
 
-#include <feetech_hardware_interface/communication_protocol.hpp>
-#include <feetech_hardware_interface/serial_port.hpp>
+#include <waveshare_hardware_interface/communication_protocol.hpp>
+#include <waveshare_hardware_interface/serial_port.hpp>
 #include <hardware_interface/handle.hpp>
 #include <hardware_interface/hardware_info.hpp>
 #include <hardware_interface/system_interface.hpp>
@@ -10,11 +10,11 @@
 #include <rclcpp_lifecycle/state.hpp>
 #include <vector>
 
-namespace feetech_ros2_driver {
+namespace waveshare_ros2_driver {
 
 using CallbackReturn = rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn;
 
-class FeetechHardwareInterface : public hardware_interface::SystemInterface {
+class WaveshareHardwareInterface : public hardware_interface::SystemInterface {
  public:
   CallbackReturn on_init(const hardware_interface::HardwareInfo& info) override;
 
@@ -29,7 +29,7 @@ class FeetechHardwareInterface : public hardware_interface::SystemInterface {
   CallbackReturn on_activate(const rclcpp_lifecycle::State& previous_state) override;
 
  private:
-  std::unique_ptr<feetech_hardware_interface::CommunicationProtocol> communication_protocol_;
+  std::unique_ptr<waveshare_hardware_interface::CommunicationProtocol> communication_protocol_;
 
   std::vector<double> hw_positions_;
   std::vector<double> state_hw_positions_;
@@ -39,4 +39,4 @@ class FeetechHardwareInterface : public hardware_interface::SystemInterface {
   std::vector<uint8_t> joint_ids_;
   std::vector<int> joint_offsets_;
 };
-}  // namespace feetech_ros2_driver
+}  // namespace waveshare_ros2_driver

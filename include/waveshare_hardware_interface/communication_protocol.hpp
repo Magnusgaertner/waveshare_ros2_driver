@@ -1,15 +1,15 @@
 #pragma once
 
-#include <feetech_hardware_interface/SMS_STS.h>
+#include <waveshare_hardware_interface/SMS_STS.h>
 #include <fmt/ranges.h>
 #include <spdlog/spdlog.h>
 #include <sys/types.h>
 
 #include <experimental/array>
-#include <feetech_hardware_interface/serial_port.hpp>
+#include <waveshare_hardware_interface/serial_port.hpp>
 #include <numeric>
 
-namespace feetech_hardware_interface {
+namespace waveshare_hardware_interface {
 
 enum class OperationMode {
   kPosition,
@@ -260,4 +260,4 @@ class CommunicationProtocol {
     return serial_port_->write(write_buf);
   }
 };
-}  // namespace feetech_hardware_interface
+}  // namespace waveshare_hardware_interface

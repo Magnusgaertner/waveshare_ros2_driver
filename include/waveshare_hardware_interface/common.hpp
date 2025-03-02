@@ -11,14 +11,14 @@
 #include <string>
 #include <tl_expected/expected.hpp>
 
-namespace feetech_hardware_interface {
+namespace waveshare_hardware_interface {
 
 template <typename T>
 using Expected = tl::expected<T, std::string>;
 using Result = Expected<void>;
 
 inline static constexpr double kStsResolution = 4096.;
-inline static constexpr std::size_t kMaxServoId = 253;
+inline static constexpr std::size_t kMaxServoId = 10;
 // STS models
 inline static constexpr std::size_t kHighByteIndex = 1;
 inline static constexpr std::size_t kLowByteIndex = 0;
@@ -136,11 +136,11 @@ inline Expected<ModelSeries> get_model_series(const std::string_view model_name)
   return tl::make_unexpected(fmt::format("Unknown model_name [{}]", model_name));
 }
 
-}  // namespace feetech_hardware_interface
+}  // namespace waveshare_hardware_interface
 
 template <typename T>
-struct fmt::formatter<feetech_hardware_interface::Expected<T>> : fmt::formatter<std::string_view> {
-  auto format(const feetech_hardware_interface::Expected<T>& result, fmt::format_context& ctx) const {
+struct fmt::formatter<waveshare_hardware_interface::Expected<T>> : fmt::formatter<std::string_view> {
+  auto format(const waveshare_hardware_interface::Expected<T>& result, fmt::format_context& ctx) const {
     if (result.has_value()) {
       return fmt::formatter<std::string_view>::format(
           fmt::format(fmt::fg(fmt::color::light_green), "Expected(value={})", result.value()), ctx);
@@ -150,17 +150,17 @@ struct fmt::formatter<feetech_hardware_interface::Expected<T>> : fmt::formatter<
 };
 
 template <>
-struct fmt::formatter<feetech_hardware_interface::ModelSeries> : formatter<std::string_view> {
-  auto format(const feetech_hardware_interface::ModelSeries& series, fmt::format_context& ctx) const
+struct fmt::formatter<waveshare_hardware_interface::ModelSeries> : formatter<std::string_view> {
+  auto format(const waveshare_hardware_interface::ModelSeries& series, fmt::format_context& ctx) const
       -> fmt::format_context::iterator {
     switch (series) {
-      case feetech_hardware_interface::ModelSeries::kSmcl:
+      case waveshare_hardware_interface::ModelSeries::kSmcl:
         return fmt::formatter<std::string_view>::format("ModelSeries::kSmcl", ctx);
-      case feetech_hardware_interface::ModelSeries::kSmbl:
+      case waveshare_hardware_interface::ModelSeries::kSmbl:
         return fmt::formatter<std::string_view>::format("ModelSeries::kSmbl", ctx);
-      case feetech_hardware_interface::ModelSeries::kSts:
+      case waveshare_hardware_interface::ModelSeries::kSts:
         return fmt::formatter<std::string_view>::format("ModelSeries::kSts", ctx);
-      case feetech_hardware_interface::ModelSeries::kScs:
+      case waveshare_hardware_interface::ModelSeries::kScs:
         return fmt::formatter<std::string_view>::format("ModelSeries::kScs", ctx);
     }
     return fmt::formatter<std::string_view>::format("ModelSeries::Unknown", ctx);

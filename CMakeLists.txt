@@ -73,7 +73,7 @@ target_link_libraries(demo
 
 add_library(
   ${PROJECT_NAME}
-  src/feetech_ros2_driver.cpp
+  src/waveshare_ros2_driver.cpp
 )
 target_include_directories(${PROJECT_NAME}
     PUBLIC
@@ -93,7 +93,7 @@ target_link_libraries(${PROJECT_NAME}
   serial_port
 )
 
-pluginlib_export_plugin_description_file(hardware_interface feetech_ros2_control_plugin_description.xml)
+pluginlib_export_plugin_description_file(hardware_interface waveshare_ros2_control_plugin_description.xml)
 
 install(
   TARGETS demo serial_port communication_protocol ${PROJECT_NAME}
