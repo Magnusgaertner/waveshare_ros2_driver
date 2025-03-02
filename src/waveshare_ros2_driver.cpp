@@ -7,7 +7,7 @@
 #include <range/v3/view/all.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <string>
-#include <string_view>
+
 #include <transmission_interface/simple_transmission_loader.hpp>
 #include <transmission_interface/transmission.hpp>
 #include <transmission_interface/transmission_interface_exception.hpp>
@@ -18,13 +18,14 @@
 
 namespace waveshare_ros2_driver {
 
-WaveshareHardwareInterface::InterfaceData::InterfaceData(const std::string& name) : name_(name) {}
+WaveshareHardwareInterface::InterfaceData::InterfaceData(std::string name) : name_(std::move(name)) {}
 
 CallbackReturn WaveshareHardwareInterface::on_init(const hardware_interface::HardwareInfo& info) {
   if (hardware_interface::SystemInterface::on_init(info) != CallbackReturn::SUCCESS) {
     return CallbackReturn::ERROR;
   }
 
+  // Read USB port from hardware info
   const auto usb_port_it = info_.hardware_parameters.find("usb_port");
   if (usb_port_it == info_.hardware_parameters.end()) {
     spdlog::error(
@@ -34,22 +35,24 @@ CallbackReturn WaveshareHardwareInterface::on_init(const hardware_interface::Har
   }
   spdlog::info("WaveshareHardware::on_init -> USB port: {}", usb_port_it->second);
 
+  // Initialize serial port
   auto serial_port = std::make_unique<waveshare_hardware_interface::SerialPort>(usb_port_it->second);
-
   if (const auto result = serial_port->configure(); !result) {
     spdlog::error("WaveshareHardware::on_init -> {}", result.error());
     return CallbackReturn::ERROR;
   }
   spdlog::info("WaveshareHardware::on_init -> Serial port configured");
 
+  // Initialize communication protocol
   communication_protocol_ =
       std::make_unique<waveshare_hardware_interface::CommunicationProtocol>(std::move(serial_port));
 
-  joint_ids_.resize(info_.joints.size(), 0);
-  joint_offsets_.resize(info_.joints.size(), 0);
+  // Initialize servo ram data
+  servo_ids_.resize(info_.joints.size(), 0);
+  servo_offsets_.resize(info_.joints.size(), 0);
 
+  // Load transmissions
   auto transmission_loader = transmission_interface::SimpleTransmissionLoader();
-
   for (const auto& transmission_info : info_.transmissions) {
     if (transmission_info.type != "transmission_interface/SimpleTransmission") {
       RCLCPP_FATAL(rclcpp::get_logger("WaveshareHardwareInterface"),
@@ -115,22 +118,22 @@ CallbackReturn WaveshareHardwareInterface::on_init(const hardware_interface::Har
 
   for (uint i = 0; i < info_.joints.size(); i++) {
     const auto& joint_params = info_.joints[i].parameters;
-    joint_ids_[i] = std::stoi(joint_params.at("id"));
-    joint_offsets_[i] = [&] {
+    servo_ids_[i] = std::stoi(joint_params.at("id"));
+    servo_offsets_[i] = [&] {
       if (const auto offset_it = joint_params.find("offset"); offset_it != joint_params.end()) {
         return std::stoi(offset_it->second);
       }
       spdlog::info("Joint '{}' does not specify an offset parameter - Setting it to 0", info_.joints[i].name);
       return 0;
     }();
-    spdlog::info("Joint '{}' -> id: {}, offset: {}", info_.joints[i].name, joint_ids_[i], joint_offsets_[i]);
+    spdlog::info("Joint '{}' -> id: {}, offset: {}", info_.joints[i].name, servo_ids_[i], servo_offsets_[i]);
 
     for (const auto& [parameter_name, address] : {std::pair{"p_cofficient", SMS_STS_P_COEF},
                                                   {"d_cofficient", SMS_STS_D_COEF},
                                                   {"i_cofficient", SMS_STS_I_COEF}}) {
       if (const auto param_it = joint_params.find(parameter_name); param_it != joint_params.end()) {
         const auto result = communication_protocol_->write(
-            joint_ids_[i], address, std::experimental::make_array(static_cast<uint8_t>(std::stoi(param_it->second))));
+            servo_ids_[i], address, std::experimental::make_array(static_cast<uint8_t>(std::stoi(param_it->second))));
         if (!result) {
           spdlog::error("WaveshareHardwareInterface::on_init -> {}", result.error());
           return CallbackReturn::ERROR;
@@ -139,28 +142,28 @@ CallbackReturn WaveshareHardwareInterface::on_init(const hardware_interface::Har
     }
   }
 
-  const auto joint_model_series = joint_ids_ | ranges::views::transform([&](const auto id) {
+  const auto joint_model_series = servo_ids_ | ranges::views::transform([&](const auto id) {
                                     return communication_protocol_->read_model_number(id)
                                         .and_then(waveshare_hardware_interface::get_model_name)
                                         .and_then(waveshare_hardware_interface::get_model_series);
                                   });
 
-  if (std::ranges::any_of(joint_model_series, [](const auto& series) { return !series.has_value(); })) {
+  if (ranges::any_of(joint_model_series, [](const auto& series) { return !series.has_value(); })) {
     spdlog::error("WaveshareHardware::on_init [One of the joints has an error]. Input: {}",
-                  ranges::views::zip(joint_ids_, joint_model_series));
+                  ranges::views::zip(servo_ids_, joint_model_series));
     return CallbackReturn::ERROR;
   }
 
   const auto js = joint_model_series | ranges::views::transform([](const auto& series) { return series.value(); });
 
   // print the series of each joint
-  std::for_each(js.begin(), js.end(), [](const auto& series) { spdlog::info("Joint series: {}", series); });
+  ranges::for_each(js, [](const auto& series) { spdlog::info("Joint series: {}", series); });
 
   // TODO: Support other series
   if (ranges::any_of(js,
                      [](const auto& series) { return series != waveshare_hardware_interface::ModelSeries::kSts; })) {
     spdlog::error("WaveshareHardware::on_init [Only STS series is supported]. Input (id, series): {}",
-                  ranges::views::zip(joint_ids_, js));
+                  ranges::views::zip(servo_ids_, js));
     return CallbackReturn::ERROR;
   }
 
@@ -187,17 +190,10 @@ std::vector<hardware_interface::StateInterface> WaveshareHardwareInterface::expo
 
 std::vector<hardware_interface::CommandInterface> WaveshareHardwareInterface::export_command_interfaces() {
   std::vector<hardware_interface::CommandInterface> command_interfaces;
-  
-  // Add joint command interfaces
-  for (auto& joint : joint_interfaces_) {
-    command_interfaces.emplace_back(joint.name_, hardware_interface::HW_IF_POSITION, &joint.command_);
-  }
-
-  // Add actuator command interfaces
-  for (auto& actuator : actuator_interfaces_) {
-    command_interfaces.emplace_back(actuator.name_, hardware_interface::HW_IF_POSITION, &actuator.command_);
-  }
-
+  // Add joint position command interfaces
+  ranges::for_each(joint_interfaces_, [&](auto& joint) { command_interfaces.emplace_back(joint.name_, hardware_interface::HW_IF_POSITION, &joint.command_); });
+  // Add actuator position command interfaces
+  ranges::for_each(actuator_interfaces_, [&](auto& actuator) { command_interfaces.emplace_back(actuator.name_, hardware_interface::HW_IF_POSITION, &actuator.command_); });
   return command_interfaces;
 }
 
@@ -205,8 +201,8 @@ hardware_interface::return_type WaveshareHardwareInterface::read(const rclcpp::T
                                                                const rclcpp::Duration& /* period */) {
   // Read from hardware
   std::vector<std::array<uint8_t, 4>> data;
-  data.reserve(joint_ids_.size());
-  if (auto result = communication_protocol_->sync_read(joint_ids_, SMS_STS_PRESENT_POSITION_L, &data); !result) {
+  data.reserve(servo_ids_.size());
+  if (auto result = communication_protocol_->sync_read(servo_ids_, SMS_STS_PRESENT_POSITION_L, &data); !result) {
     RCLCPP_ERROR(rclcpp::get_logger("WaveshareHardwareInterface"), "Read failed: %s", result.error().c_str());
     return hardware_interface::return_type::ERROR;
   }
@@ -216,7 +212,7 @@ hardware_interface::return_type WaveshareHardwareInterface::read(const rclcpp::T
     actuator_interfaces_[i].state_ = waveshare_hardware_interface::to_radians(
         waveshare_hardware_interface::from_sts(
             waveshare_hardware_interface::WordBytes{.low = data[i][0], .high = data[i][1]}) -
-        joint_offsets_[i]);
+        servo_offsets_[i]);
     actuator_interfaces_[i].transmission_passthrough_ = actuator_interfaces_[i].state_;
 
     actuator_interfaces_[i].velocity_ = waveshare_hardware_interface::to_radians(
@@ -258,17 +254,17 @@ hardware_interface::return_type WaveshareHardwareInterface::write(const rclcpp::
 
   // Convert actuator commands to hardware positions
   std::vector<int> positions;
-  positions.reserve(joint_ids_.size());
+  positions.reserve(servo_ids_.size());
   for (size_t i = 0; i < actuator_interfaces_.size(); ++i) {
     positions.push_back(
-        waveshare_hardware_interface::from_radians(actuator_interfaces_[i].command_) + joint_offsets_[i]);
+        waveshare_hardware_interface::from_radians(actuator_interfaces_[i].command_) + servo_offsets_[i]);
   }
 
   // Write to hardware
   const auto write_result = communication_protocol_->sync_write_position(
-      joint_ids_, positions,
-      std::vector(joint_ids_.size(), 2400),  // speed
-      std::vector(joint_ids_.size(), 50));   // acceleration
+      servo_ids_, positions,
+      std::vector(servo_ids_.size(), 2400),  // speed
+      std::vector(servo_ids_.size(), 50));   // acceleration
 
   if (!write_result) {
     RCLCPP_ERROR(rclcpp::get_logger("WaveshareHardwareInterface"), 
@@ -284,12 +280,8 @@ CallbackReturn WaveshareHardwareInterface::on_activate(const rclcpp_lifecycle::S
   read(rclcpp::Time{}, rclcpp::Duration::from_seconds(0));
   
   // Set initial commands to current states
-  for (size_t i = 0; i < joint_interfaces_.size(); ++i) {
-    joint_interfaces_[i].command_ = joint_interfaces_[i].state_;
-  }
-  for (size_t i = 0; i < actuator_interfaces_.size(); ++i) {
-    actuator_interfaces_[i].command_ = actuator_interfaces_[i].state_;
-  }
+  std::ranges::for_each(joint_interfaces_, [](auto& joint) {joint.command_ = joint.state_;});
+  std::ranges::for_each(actuator_interfaces_, [](auto& actuator) {actuator.command_ = actuator.state_;});
 
   return CallbackReturn::SUCCESS;
 }

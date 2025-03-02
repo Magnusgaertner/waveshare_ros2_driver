@@ -26,7 +26,7 @@ class WaveshareHardwareInterface : public hardware_interface::SystemInterface {
 
  private:
   struct InterfaceData {
-    explicit InterfaceData(const std::string& name);
+    explicit InterfaceData(std::string name);
     std::string name_;
     double command_{0.0};
     double state_{0.0};
@@ -39,8 +39,8 @@ class WaveshareHardwareInterface : public hardware_interface::SystemInterface {
   std::vector<InterfaceData> joint_interfaces_;
   std::vector<InterfaceData> actuator_interfaces_;
 
-  std::vector<uint8_t> joint_ids_;
-  std::vector<int> joint_offsets_;
+  std::vector<uint8_t> servo_ids_;
+  std::vector<int> servo_offsets_;
   std::unique_ptr<waveshare_hardware_interface::CommunicationProtocol> communication_protocol_;
 };
 
