@@ -20,6 +20,7 @@ find_package(range-v3 REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(hardware_interface REQUIRED)
 find_package(pluginlib REQUIRED)
+find_package(transmission_interface REQUIRED)
 # Find LibSerial package
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(SERIAL libserial REQUIRED)
@@ -87,6 +88,7 @@ ament_target_dependencies(
   lifecycle_msgs
   hardware_interface
   pluginlib
+  transmission_interface
 )
 target_link_libraries(${PROJECT_NAME}
   communication_protocol
@@ -112,6 +114,7 @@ ament_export_dependencies(
   rclcpp
   hardware_interface
   pluginlib
+  transmission_interface
 )
 
 ament_generate_version_header(${PROJECT_NAME} HEADER_PATH ${PROJECT_NAME}/version.hpp)
