@@ -31,12 +31,17 @@ class WaveshareHardwareInterface : public hardware_interface::SystemInterface {
     double command_{0.0};
     double state_{0.0};
     double velocity_{0.0};
+    // passthrough represents the transmission input/output 
+    // e.g we register these handles to the transmission
     double transmission_passthrough_{0.0};
     double transmission_passthrough_velocity_{0.0};
   };
 
+  // container for transmissions
   std::vector<std::shared_ptr<transmission_interface::Transmission>> transmissions_;
+  // container for join interfaces
   std::vector<InterfaceData> joint_interfaces_;
+  // container for actuator interfaces
   std::vector<InterfaceData> actuator_interfaces_;
 
   std::vector<uint8_t> servo_ids_;

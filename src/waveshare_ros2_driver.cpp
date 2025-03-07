@@ -7,18 +7,104 @@
 #include <range/v3/view/all.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <string>
-
+#include <transmission_interface/four_bar_linkage_transmission.hpp>
+#include <transmission_interface/four_bar_linkage_transmission_loader.hpp>
+#include <transmission_interface/handle.hpp>
 #include <transmission_interface/simple_transmission_loader.hpp>
 #include <transmission_interface/transmission.hpp>
 #include <transmission_interface/transmission_interface_exception.hpp>
+#include <transmission_interface/transmission_loader.hpp>
 #include <vector>
 #include <waveshare_hardware_interface/common.hpp>
 #include <waveshare_hardware_interface/communication_protocol.hpp>
 #include <waveshare_ros2_driver/waveshare_ros2_driver.hpp>
 
+#define DEBUG(...) RCLCPP_DEBUG(rclcpp::get_logger("WaveshareHardwareInterface"), __VA_ARGS__)
+#define INFO(...) RCLCPP_INFO(rclcpp::get_logger("WaveshareHardwareInterface"), __VA_ARGS__)
+#define ERROR(...) RCLCPP_ERROR(rclcpp::get_logger("WaveshareHardwareInterface"), __VA_ARGS__)
+#define FATAL(...) RCLCPP_FATAL(rclcpp::get_logger("WaveshareHardwareInterface"), __VA_ARGS__)
+
 namespace waveshare_ros2_driver {
 
+using hardware_interface::HW_IF_POSITION;
+using hardware_interface::HW_IF_VELOCITY;
 WaveshareHardwareInterface::InterfaceData::InterfaceData(std::string name) : name_(std::move(name)) {}
+
+template <typename InterfaceT>
+auto get_or_create_interface(std::string_view name, std::vector<InterfaceT>& interfaces) {  // NOLINT
+  auto interface = std::ranges::find_if(interfaces, [&](const auto& iter) { return iter.name_ == name; });
+  if (interface == interfaces.end()) {
+    interface = interfaces.insert(interfaces.end(), InterfaceT(std::string(name)));
+  }
+  return interface;
+}
+
+template <typename InterfaceT>
+std::shared_ptr<transmission_interface::Transmission> configure_simple_transmission(  // NOLINT
+    const hardware_interface::TransmissionInfo& transmission_info,
+    InterfaceT& joint_interfaces_,
+    InterfaceT& actuator_interfaces_) {
+  using hardware_interface::HW_IF_POSITION;
+  using hardware_interface::HW_IF_VELOCITY;
+  using transmission_interface::ActuatorHandle;
+  using transmission_interface::JointHandle;
+
+  // Create joint handles for the transmission
+  const auto& joint_info = transmission_info.joints[0];
+  const auto& joint_name = joint_info.name;
+  auto joint_interface = get_or_create_interface(joint_name, joint_interfaces_);
+  JointHandle joint_position(joint_name, HW_IF_POSITION, &joint_interface->transmission_passthrough_);
+  JointHandle joint_velocity(joint_name, HW_IF_VELOCITY, &joint_interface->transmission_passthrough_velocity_);
+
+  // Create actuator handles for the transmission
+  const auto& actuator_info = transmission_info.actuators[0];
+  const auto& actuator_name = actuator_info.name;
+  auto actuator_interface = get_or_create_interface(actuator_name, actuator_interfaces_);
+  ActuatorHandle actuator_position(actuator_name, HW_IF_POSITION, &actuator_interface->transmission_passthrough_);
+  ActuatorHandle actuator_velocity(
+      actuator_name, HW_IF_VELOCITY, &actuator_interface->transmission_passthrough_velocity_);
+
+  // Create and configure transmission
+  auto transmission_loader = std::make_shared<transmission_interface::SimpleTransmissionLoader>();
+  auto transmission = transmission_loader->load(transmission_info);
+  transmission->configure({joint_position, joint_velocity}, {actuator_position, actuator_velocity});
+  return transmission;
+}
+
+template <typename InterfaceT>
+std::shared_ptr<transmission_interface::Transmission> configure_four_bar_linkage_transmission(  // NOLINT
+    const hardware_interface::TransmissionInfo& transmission_info,
+    InterfaceT& joint_interfaces_,
+    InterfaceT& actuator_interfaces_) {
+  using transmission_interface::ActuatorHandle;
+  using transmission_interface::JointHandle;
+
+  // Create joint handles for both joints in the four bar linkage
+  std::vector<JointHandle> joint_handles;
+  for (const auto& joint_info : transmission_info.joints) {
+    const auto& joint_name = joint_info.name;
+    auto joint_interface = get_or_create_interface(joint_name, joint_interfaces_);
+    joint_handles.emplace_back(joint_name, HW_IF_POSITION, &joint_interface->transmission_passthrough_);
+    joint_handles.emplace_back(joint_name, HW_IF_VELOCITY, &joint_interface->transmission_passthrough_velocity_);
+  }
+
+  // Create actuator handles for both actuators
+  std::vector<ActuatorHandle> actuator_handles;
+  for (const auto& actuator_info : transmission_info.actuators) {
+    const auto& actuator_name = actuator_info.name;
+    auto actuator_interface = get_or_create_interface(actuator_name, actuator_interfaces_);
+    actuator_handles.emplace_back(actuator_name, HW_IF_POSITION, &actuator_interface->transmission_passthrough_);
+    actuator_handles.emplace_back(
+        actuator_name, HW_IF_VELOCITY, &actuator_interface->transmission_passthrough_velocity_);
+  }
+
+  // Create and configure transmission
+  auto transmission_loader = std::make_shared<transmission_interface::FourBarLinkageTransmissionLoader>();
+  auto transmission = std::static_pointer_cast<transmission_interface::FourBarLinkageTransmission>(
+      transmission_loader->load(transmission_info));
+  transmission->configure(joint_handles, actuator_handles);
+  return transmission;
+}
 
 CallbackReturn WaveshareHardwareInterface::on_init(const hardware_interface::HardwareInfo& info) {
   if (hardware_interface::SystemInterface::on_init(info) != CallbackReturn::SUCCESS) {
@@ -28,21 +114,21 @@ CallbackReturn WaveshareHardwareInterface::on_init(const hardware_interface::Har
   // Read USB port from hardware info
   const auto usb_port_it = info_.hardware_parameters.find("usb_port");
   if (usb_port_it == info_.hardware_parameters.end()) {
-    RCLCPP_ERROR(rclcpp::get_logger("WaveshareHardwareInterface"),
+    ERROR(
         "Hardware parameter [%s] not found!. "
         "Make sure to have <param name=\"usb_port\">/dev/XXXX</param>",
         "usb_port");
     return CallbackReturn::ERROR;
   }
-  RCLCPP_INFO(rclcpp::get_logger("WaveshareHardwareInterface"), "USB port: %s", usb_port_it->second.c_str());
+  INFO("USB port: %s", usb_port_it->second.c_str());
 
   // Initialize serial port
   auto serial_port = std::make_unique<waveshare_hardware_interface::SerialPort>(usb_port_it->second);
   if (const auto result = serial_port->configure(); !result) {
-    RCLCPP_ERROR(rclcpp::get_logger("WaveshareHardwareInterface"), "Serial port configuration error: %s", result.error().c_str());
+    ERROR("Serial port configuration error: %s", result.error().c_str());
     return CallbackReturn::ERROR;
   }
-  RCLCPP_INFO(rclcpp::get_logger("WaveshareHardwareInterface"), "Serial port configured");
+  INFO("Serial port configured");
 
   // Initialize communication protocol
   communication_protocol_ =
@@ -53,68 +139,32 @@ CallbackReturn WaveshareHardwareInterface::on_init(const hardware_interface::Har
   servo_offsets_.resize(info_.joints.size(), 0);
 
   // Load transmissions
-  auto transmission_loader = transmission_interface::SimpleTransmissionLoader();
+  using std::shared_ptr;
+  using transmission_interface::ActuatorHandle;
+  using transmission_interface::FourBarLinkageTransmissionLoader;
+  using transmission_interface::JointHandle;
+  using transmission_interface::SimpleTransmissionLoader;
+  using transmission_interface::TransmissionLoader;
+
   for (const auto& transmission_info : info_.transmissions) {
-    if (transmission_info.type != "transmission_interface/SimpleTransmission") {
-      RCLCPP_FATAL(rclcpp::get_logger("WaveshareHardwareInterface"),
-                   "Transmission '%s' of type '%s' not supported",
-                   transmission_info.name.c_str(),
-                   transmission_info.type.c_str());
-      return CallbackReturn::ERROR;
-    }
-    RCLCPP_INFO(rclcpp::get_logger("WaveshareHardwareInterface"), "Loading transmission '%s'", transmission_info.name.c_str());
-
-    std::shared_ptr<transmission_interface::Transmission> transmission;
+    INFO("Loading transmission '%s'", transmission_info.name.c_str());
     try {
-      transmission = transmission_loader.load(transmission_info);
+      if (transmission_info.type == "transmission_interface/SimpleTransmission") {
+        transmissions_.emplace_back(
+            configure_simple_transmission(transmission_info, joint_interfaces_, actuator_interfaces_));
+      } else if (transmission_info.type == "transmission_interface/FourBarLinkageTransmission") {
+        transmissions_.emplace_back(
+            configure_four_bar_linkage_transmission(transmission_info, joint_interfaces_, actuator_interfaces_));
+      } else {
+        FATAL("Transmission '%s' of type '%s' not supported",
+              transmission_info.name.c_str(),
+              transmission_info.type.c_str());
+        return CallbackReturn::ERROR;
+      }
     } catch (const transmission_interface::TransmissionInterfaceException& exc) {
-      RCLCPP_FATAL(rclcpp::get_logger("WaveshareHardwareInterface"),
-                   "Error loading transmission '%s': %s",
-                   transmission_info.name.c_str(),
-                   exc.what());
+      FATAL("Error configuring transmission '%s': %s", transmission_info.name.c_str(), exc.what());
       return CallbackReturn::ERROR;
     }
-    RCLCPP_INFO(rclcpp::get_logger("WaveshareHardwareInterface"), "Transmission '%s' loaded", transmission_info.name.c_str());
-
-    // Create joint and actuator handles for transmission
-    std::vector<transmission_interface::JointHandle> joint_handles;
-    for (const auto& joint_info : transmission_info.joints) {
-      const auto joint_interface = joint_interfaces_.insert(joint_interfaces_.end(), InterfaceData(joint_info.name));
-
-      transmission_interface::JointHandle joint_handle(
-        joint_info.name, hardware_interface::HW_IF_POSITION, &joint_interface->transmission_passthrough_);
-      joint_handles.push_back(joint_handle);
-
-      transmission_interface::JointHandle joint_handle_velocity(
-        joint_info.name, hardware_interface::HW_IF_VELOCITY, &joint_interface->transmission_passthrough_velocity_);
-      joint_handles.push_back(joint_handle_velocity);
-    }
-
-    std::vector<transmission_interface::ActuatorHandle> actuator_handles;
-    for (const auto& actuator_info : transmission_info.actuators) {
-      const auto actuator_interface =
-        actuator_interfaces_.insert(actuator_interfaces_.end(), InterfaceData(actuator_info.name));
-
-      transmission_interface::ActuatorHandle actuator_handle(
-        actuator_info.name, hardware_interface::HW_IF_POSITION, &actuator_interface->transmission_passthrough_);
-      actuator_handles.push_back(actuator_handle);
-
-      transmission_interface::ActuatorHandle actuator_handle_velocity(
-        actuator_info.name, hardware_interface::HW_IF_VELOCITY, &actuator_interface->transmission_passthrough_velocity_);
-      actuator_handles.push_back(actuator_handle_velocity);
-    }
-
-    try {
-      transmission->configure(joint_handles, actuator_handles);
-    } catch (const transmission_interface::TransmissionInterfaceException& exc) {
-      RCLCPP_FATAL(rclcpp::get_logger("WaveshareHardwareInterface"),
-                   "Error configuring transmission '%s': %s",
-                   transmission_info.name.c_str(),
-                   exc.what());
-      return CallbackReturn::ERROR;
-    }
-
-    transmissions_.push_back(transmission);
   }
 
   for (uint i = 0; i < info_.joints.size(); i++) {
@@ -124,16 +174,12 @@ CallbackReturn WaveshareHardwareInterface::on_init(const hardware_interface::Har
       if (const auto offset_it = joint_params.find("offset"); offset_it != joint_params.end()) {
         return std::stoi(offset_it->second);
       }
-      RCLCPP_INFO(rclcpp::get_logger("WaveshareHardwareInterface"), 
-                  "Joint '%s' does not specify an offset parameter - Setting it to 0", 
+      RCLCPP_INFO(rclcpp::get_logger("WaveshareHardwareInterface"),
+                  "Joint '%s' does not specify an offset parameter - Setting it to 0",
                   info_.joints[i].name.c_str());
       return 0;
     }();
-    RCLCPP_INFO(rclcpp::get_logger("WaveshareHardwareInterface"), 
-                "Joint '%s' -> id: %d, offset: %d", 
-                info_.joints[i].name.c_str(), 
-                servo_ids_[i], 
-                servo_offsets_[i]);
+    INFO("Joint '%s' -> id: %d, offset: %d", info_.joints[i].name.c_str(), servo_ids_[i], servo_offsets_[i]);
 
     for (const auto& [parameter_name, address] : {std::pair{"p_cofficient", SMS_STS_P_COEF},
                                                   {"d_cofficient", SMS_STS_D_COEF},
@@ -142,9 +188,7 @@ CallbackReturn WaveshareHardwareInterface::on_init(const hardware_interface::Har
         const auto result = communication_protocol_->write(
             servo_ids_[i], address, std::experimental::make_array(static_cast<uint8_t>(std::stoi(param_it->second))));
         if (!result) {
-          RCLCPP_ERROR(rclcpp::get_logger("WaveshareHardwareInterface"), 
-                      "Communication protocol write error: %s", 
-                      result.error().c_str());
+          ERROR("Communication protocol write error: %s", result.error().c_str());
           return CallbackReturn::ERROR;
         }
       }
@@ -158,8 +202,7 @@ CallbackReturn WaveshareHardwareInterface::on_init(const hardware_interface::Har
                                   });
 
   if (ranges::any_of(joint_model_series, [](const auto& series) { return !series.has_value(); })) {
-    RCLCPP_ERROR(rclcpp::get_logger("WaveshareHardwareInterface"), 
-                 "One of the joints has an error reading model series");
+    ERROR("One of the joints has an error reading model series");
     return CallbackReturn::ERROR;
   }
 
@@ -167,14 +210,13 @@ CallbackReturn WaveshareHardwareInterface::on_init(const hardware_interface::Har
 
   // print the series of each joint
   for (const auto& series : js) {
-    RCLCPP_INFO(rclcpp::get_logger("WaveshareHardwareInterface"), "Joint series: %d", static_cast<int>(series));
+    INFO("Joint series: %d", static_cast<int>(series));
   }
 
-  // TODO: Support other series
+  // TODO(all): Support other series
   if (ranges::any_of(js,
                      [](const auto& series) { return series != waveshare_hardware_interface::ModelSeries::kSts; })) {
-    RCLCPP_ERROR(rclcpp::get_logger("WaveshareHardwareInterface"), 
-                 "Only STS series is supported");
+    ERROR("Only STS series is supported");
     return CallbackReturn::ERROR;
   }
 
@@ -183,17 +225,17 @@ CallbackReturn WaveshareHardwareInterface::on_init(const hardware_interface::Har
 
 std::vector<hardware_interface::StateInterface> WaveshareHardwareInterface::export_state_interfaces() {
   std::vector<hardware_interface::StateInterface> state_interfaces;
-  
+
   // Add joint state interfaces
   for (auto& joint : joint_interfaces_) {
-    state_interfaces.emplace_back(joint.name_, hardware_interface::HW_IF_POSITION, &joint.state_);
-    state_interfaces.emplace_back(joint.name_, hardware_interface::HW_IF_VELOCITY, &joint.velocity_);
+    state_interfaces.emplace_back(joint.name_, HW_IF_POSITION, &joint.state_);
+    state_interfaces.emplace_back(joint.name_, HW_IF_VELOCITY, &joint.velocity_);
   }
 
   // Add actuator state interfaces
   for (auto& actuator : actuator_interfaces_) {
-    state_interfaces.emplace_back(actuator.name_, hardware_interface::HW_IF_POSITION, &actuator.state_);
-    state_interfaces.emplace_back(actuator.name_, hardware_interface::HW_IF_VELOCITY, &actuator.velocity_);
+    state_interfaces.emplace_back(actuator.name_, HW_IF_POSITION, &actuator.state_);
+    state_interfaces.emplace_back(actuator.name_, HW_IF_VELOCITY, &actuator.velocity_);
   }
 
   return state_interfaces;
@@ -202,19 +244,22 @@ std::vector<hardware_interface::StateInterface> WaveshareHardwareInterface::expo
 std::vector<hardware_interface::CommandInterface> WaveshareHardwareInterface::export_command_interfaces() {
   std::vector<hardware_interface::CommandInterface> command_interfaces;
   // Add joint position command interfaces
-  ranges::for_each(joint_interfaces_, [&](auto& joint) { command_interfaces.emplace_back(joint.name_, hardware_interface::HW_IF_POSITION, &joint.command_); });
+  ranges::for_each(joint_interfaces_,
+                   [&](auto& joint) { command_interfaces.emplace_back(joint.name_, HW_IF_POSITION, &joint.command_); });
   // Add actuator position command interfaces
-  ranges::for_each(actuator_interfaces_, [&](auto& actuator) { command_interfaces.emplace_back(actuator.name_, hardware_interface::HW_IF_POSITION, &actuator.command_); });
+  ranges::for_each(actuator_interfaces_, [&](auto& actuator) {
+    command_interfaces.emplace_back(actuator.name_, HW_IF_POSITION, &actuator.command_);
+  });
   return command_interfaces;
 }
 
 hardware_interface::return_type WaveshareHardwareInterface::read(const rclcpp::Time& /* time */,
-                                                               const rclcpp::Duration& /* period */) {
+                                                                 const rclcpp::Duration& /* period */) {
   // Read from hardware
   std::vector<std::array<uint8_t, 4>> data;
   data.reserve(servo_ids_.size());
   if (auto result = communication_protocol_->sync_read(servo_ids_, SMS_STS_PRESENT_POSITION_L, &data); !result) {
-    RCLCPP_ERROR(rclcpp::get_logger("WaveshareHardwareInterface"), "Read failed: %s", result.error().c_str());
+    ERROR("Read failed: %s", result.error().c_str());
     return hardware_interface::return_type::ERROR;
   }
 
@@ -224,11 +269,11 @@ hardware_interface::return_type WaveshareHardwareInterface::read(const rclcpp::T
         waveshare_hardware_interface::from_sts(
             waveshare_hardware_interface::WordBytes{.low = data[i][0], .high = data[i][1]}) -
         servo_offsets_[i]);
-    actuator_interfaces_[i].transmission_passthrough_ = actuator_interfaces_[i].state_;
-
-    actuator_interfaces_[i].velocity_ = waveshare_hardware_interface::to_radians(
-      waveshare_hardware_interface::from_sts(
+    actuator_interfaces_[i].velocity_ = waveshare_hardware_interface::to_radians(waveshare_hardware_interface::from_sts(
         waveshare_hardware_interface::WordBytes{.low = data[i][2], .high = data[i][3]}));
+
+    // Transmission passthrough
+    actuator_interfaces_[i].transmission_passthrough_ = actuator_interfaces_[i].state_;
     actuator_interfaces_[i].transmission_passthrough_velocity_ = actuator_interfaces_[i].velocity_;
   }
 
@@ -247,39 +292,33 @@ hardware_interface::return_type WaveshareHardwareInterface::read(const rclcpp::T
 }
 
 hardware_interface::return_type WaveshareHardwareInterface::write(const rclcpp::Time& /* time */,
-                                                                const rclcpp::Duration& /* period */) {
+                                                                  const rclcpp::Duration& /* period */) {
+  using std::ranges::for_each;
   // Update transmission input from joint commands
-  for (auto& joint : joint_interfaces_) {
-    joint.transmission_passthrough_ = joint.command_;
-  }
-
+  for_each(joint_interfaces_, [](auto& joint) { joint.transmission_passthrough_ = joint.command_; });
   // Process transmissions
-  for (auto& transmission : transmissions_) {
-    transmission->joint_to_actuator();
-  }
-
+  for_each(transmissions_, [](auto& transmission) { transmission->joint_to_actuator(); });
   // Update actuator commands from transmission results
-  for (auto& actuator : actuator_interfaces_) {
-    actuator.command_ = actuator.transmission_passthrough_;
-  }
+  for_each(actuator_interfaces_, [](auto& actuator) { actuator.command_ = actuator.transmission_passthrough_; });
 
   // Convert actuator commands to hardware positions
+  // todo velocity and acceleration support?
   std::vector<int> positions;
   positions.reserve(servo_ids_.size());
   for (size_t i = 0; i < actuator_interfaces_.size(); ++i) {
-    positions.push_back(
-        waveshare_hardware_interface::from_radians(actuator_interfaces_[i].command_) + servo_offsets_[i]);
+    positions.push_back(waveshare_hardware_interface::from_radians(actuator_interfaces_[i].command_) +
+                        servo_offsets_[i]);
   }
 
   // Write to hardware
-  const auto write_result = communication_protocol_->sync_write_position(
-      servo_ids_, positions,
-      std::vector(servo_ids_.size(), 2400),  // speed
-      std::vector(servo_ids_.size(), 50));   // acceleration
+  const auto write_result =
+      communication_protocol_->sync_write_position(servo_ids_,
+                                                   positions,
+                                                   std::vector(servo_ids_.size(), 2400),  // speed
+                                                   std::vector(servo_ids_.size(), 50));   // acceleration
 
   if (!write_result) {
-    RCLCPP_ERROR(rclcpp::get_logger("WaveshareHardwareInterface"), 
-                 "Write failed: %s", write_result.error().c_str());
+    ERROR("Write failed: %s", write_result.error().c_str());
     return hardware_interface::return_type::ERROR;
   }
 
@@ -289,10 +328,11 @@ hardware_interface::return_type WaveshareHardwareInterface::write(const rclcpp::
 CallbackReturn WaveshareHardwareInterface::on_activate(const rclcpp_lifecycle::State& /* previous_state */) {
   // Read current hardware state
   read(rclcpp::Time{}, rclcpp::Duration::from_seconds(0));
-  
+
   // Set initial commands to current states
-  std::ranges::for_each(joint_interfaces_, [](auto& joint) {joint.command_ = joint.state_;});
-  std::ranges::for_each(actuator_interfaces_, [](auto& actuator) {actuator.command_ = actuator.state_;});
+  std::ranges::for_each(actuator_interfaces_, [](auto& actuator) { actuator.command_ = actuator.state_; });
+  // todo need to propagate transmissions?
+  std::ranges::for_each(joint_interfaces_, [](auto& joint) { joint.command_ = joint.state_; });
 
   return CallbackReturn::SUCCESS;
 }
