@@ -28,20 +28,21 @@ CallbackReturn WaveshareHardwareInterface::on_init(const hardware_interface::Har
   // Read USB port from hardware info
   const auto usb_port_it = info_.hardware_parameters.find("usb_port");
   if (usb_port_it == info_.hardware_parameters.end()) {
-    spdlog::error(
-        "WaveshareHardware::on_init Hardware parameter [{}] not found!. "
-        "Make sure to have <param name=\"usb_port\">/dev/XXXX</param>");
+    RCLCPP_ERROR(rclcpp::get_logger("WaveshareHardwareInterface"),
+        "Hardware parameter [%s] not found!. "
+        "Make sure to have <param name=\"usb_port\">/dev/XXXX</param>",
+        "usb_port");
     return CallbackReturn::ERROR;
   }
-  spdlog::info("WaveshareHardware::on_init -> USB port: {}", usb_port_it->second);
+  RCLCPP_INFO(rclcpp::get_logger("WaveshareHardwareInterface"), "USB port: %s", usb_port_it->second.c_str());
 
   // Initialize serial port
   auto serial_port = std::make_unique<waveshare_hardware_interface::SerialPort>(usb_port_it->second);
   if (const auto result = serial_port->configure(); !result) {
-    spdlog::error("WaveshareHardware::on_init -> {}", result.error());
+    RCLCPP_ERROR(rclcpp::get_logger("WaveshareHardwareInterface"), "Serial port configuration error: %s", result.error().c_str());
     return CallbackReturn::ERROR;
   }
-  spdlog::info("WaveshareHardware::on_init -> Serial port configured");
+  RCLCPP_INFO(rclcpp::get_logger("WaveshareHardwareInterface"), "Serial port configured");
 
   // Initialize communication protocol
   communication_protocol_ =
@@ -123,10 +124,16 @@ CallbackReturn WaveshareHardwareInterface::on_init(const hardware_interface::Har
       if (const auto offset_it = joint_params.find("offset"); offset_it != joint_params.end()) {
         return std::stoi(offset_it->second);
       }
-      spdlog::info("Joint '{}' does not specify an offset parameter - Setting it to 0", info_.joints[i].name);
+      RCLCPP_INFO(rclcpp::get_logger("WaveshareHardwareInterface"), 
+                  "Joint '%s' does not specify an offset parameter - Setting it to 0", 
+                  info_.joints[i].name.c_str());
       return 0;
     }();
-    spdlog::info("Joint '{}' -> id: {}, offset: {}", info_.joints[i].name, servo_ids_[i], servo_offsets_[i]);
+    RCLCPP_INFO(rclcpp::get_logger("WaveshareHardwareInterface"), 
+                "Joint '%s' -> id: %d, offset: %d", 
+                info_.joints[i].name.c_str(), 
+                servo_ids_[i], 
+                servo_offsets_[i]);
 
     for (const auto& [parameter_name, address] : {std::pair{"p_cofficient", SMS_STS_P_COEF},
                                                   {"d_cofficient", SMS_STS_D_COEF},
@@ -135,7 +142,9 @@ CallbackReturn WaveshareHardwareInterface::on_init(const hardware_interface::Har
         const auto result = communication_protocol_->write(
             servo_ids_[i], address, std::experimental::make_array(static_cast<uint8_t>(std::stoi(param_it->second))));
         if (!result) {
-          spdlog::error("WaveshareHardwareInterface::on_init -> {}", result.error());
+          RCLCPP_ERROR(rclcpp::get_logger("WaveshareHardwareInterface"), 
+                      "Communication protocol write error: %s", 
+                      result.error().c_str());
           return CallbackReturn::ERROR;
         }
       }
@@ -149,21 +158,23 @@ CallbackReturn WaveshareHardwareInterface::on_init(const hardware_interface::Har
                                   });
 
   if (ranges::any_of(joint_model_series, [](const auto& series) { return !series.has_value(); })) {
-    spdlog::error("WaveshareHardware::on_init [One of the joints has an error]. Input: {}",
-                  ranges::views::zip(servo_ids_, joint_model_series));
+    RCLCPP_ERROR(rclcpp::get_logger("WaveshareHardwareInterface"), 
+                 "One of the joints has an error reading model series");
     return CallbackReturn::ERROR;
   }
 
   const auto js = joint_model_series | ranges::views::transform([](const auto& series) { return series.value(); });
 
   // print the series of each joint
-  ranges::for_each(js, [](const auto& series) { spdlog::info("Joint series: {}", series); });
+  for (const auto& series : js) {
+    RCLCPP_INFO(rclcpp::get_logger("WaveshareHardwareInterface"), "Joint series: %d", static_cast<int>(series));
+  }
 
   // TODO: Support other series
   if (ranges::any_of(js,
                      [](const auto& series) { return series != waveshare_hardware_interface::ModelSeries::kSts; })) {
-    spdlog::error("WaveshareHardware::on_init [Only STS series is supported]. Input (id, series): {}",
-                  ranges::views::zip(servo_ids_, js));
+    RCLCPP_ERROR(rclcpp::get_logger("WaveshareHardwareInterface"), 
+                 "Only STS series is supported");
     return CallbackReturn::ERROR;
   }
 
