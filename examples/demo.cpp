@@ -53,7 +53,7 @@ void sync_read_position(CommunicationProtocol& communication_protocol) {
         });
     spdlog::info("Position: {}", positions | ranges::views::transform([](const auto& position) {
                                    return from_sts(WordBytes{.low = position[0], .high = position[1]});
-                                 }) | ranges::views::transform(to_angle));
+                                 }) | ranges::views::transform(sts_to_angle));
     std::this_thread::sleep_for(kSleepTime);
   }
 }
@@ -61,7 +61,7 @@ void sync_read_position(CommunicationProtocol& communication_protocol) {
 void read_position(CommunicationProtocol& communication_protocol) {
   const auto id = std::stoi(get_input("Enter servo ID: "));
   while (true) {
-    const auto position = to_angle(communication_protocol.read_position(id)
+    const auto position = sts_to_angle(communication_protocol.read_position(id)
                                        .or_else([](const std::string& error) { throw std::runtime_error(error); })
                                        .value());
     spdlog::info("Position: {:.3f}°", position);
@@ -77,10 +77,10 @@ void sync_write_position(CommunicationProtocol& communication_protocol) {
 
   while (true) {
     const auto desired_joint_position = std::stoi(get_input("Enter desired joint position: "));
-    std::vector<int> positions(num_servos, from_angle(desired_joint_position));
+    std::vector<int> positions(num_servos, sts_from_angle(desired_joint_position));
 
     spdlog::info("Setting positions to {}", positions);
-    communication_protocol.sync_write_position(ids, positions, speeds, accelerations)
+    communication_protocol.sync_write_position(ids, std::vector<bool>(ids.size(), true), positions, speeds, accelerations)
         .or_else([=](const std::string& error) {
           throw std::runtime_error(fmt::format("Failed to set position [ids={}]", ids, error));
         });
@@ -91,7 +91,7 @@ void reg_write_position(CommunicationProtocol& communication_protocol) {
   const auto num_servos = std::stoi(get_input("Enter number of servos: "));
   while (true) {
     const auto desired_joint_position = std::stoi(get_input("Enter desired joint position: "));
-    const auto data = from_angle(desired_joint_position);
+    const auto data = sts_from_angle(desired_joint_position);
 
     spdlog::info("Setting position to {}°: {}", desired_joint_position, data);
     for (uint8_t servo_id = 1; servo_id <= num_servos; servo_id++) {
@@ -123,7 +123,7 @@ void write_position(CommunicationProtocol& communication_protocol) {
     double position = -1.;
     while (std::abs(position - desired_joint_position) > 1e2) {
       position =
-          to_angle(communication_protocol.read_position(id)
+          sts_to_angle(communication_protocol.read_position(id)
                        .or_else([](const std::string& error) -> Expected<int> { throw std::runtime_error(error); })
                        .value());
       spdlog::info("Current position: {:.3f}°", position);
@@ -135,7 +135,7 @@ void write_position(CommunicationProtocol& communication_protocol) {
 void read_speed(CommunicationProtocol& communication_protocol) {
   const auto id = std::stoi(get_input("Enter servo ID: "));
   while (true) {
-    const auto speed = to_angle(communication_protocol.read_speed(id)
+    const auto speed = sts_to_angle(communication_protocol.read_speed(id)
                                     .or_else([](const std::string& error) { throw std::runtime_error(error); })
                                     .value());
     spdlog::info("Speed: {:.3f}", speed);

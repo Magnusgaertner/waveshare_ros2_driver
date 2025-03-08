@@ -5,7 +5,6 @@
 #include <libserial/SerialPortConstants.h>
 
 #include <numbers>
-#include <optional>
 #include <range/v3/range/concepts.hpp>
 #include <range/v3/range/traits.hpp>
 #include <string>
@@ -17,23 +16,40 @@ template <typename T>
 using Expected = tl::expected<T, std::string>;
 using Result = Expected<void>;
 
-inline static constexpr double kStsResolution = 4096.;
 inline static constexpr std::size_t kMaxServoId = 10;
+
 // STS models
-inline static constexpr std::size_t kHighByteIndex = 1;
-inline static constexpr std::size_t kLowByteIndex = 0;
+inline static constexpr double kStsResolution = 4096.;
+// inline static constexpr std::size_t kHighByteIndex = 1;
+// inline static constexpr std::size_t kLowByteIndex = 0;
+
+// SC models
+inline static constexpr double kScResolution = 1024.;
+// inline static constexpr std::size_t kScHighByteIndex = 0;
+// inline static constexpr std::size_t kScLowByteIndex = 1;
 
 Expected<LibSerial::BaudRate> to_baudrate(std::size_t baud) noexcept;
 
-inline auto to_angle(const int data) { return data * 360.0 / kStsResolution; }
+inline auto sts_to_angle(const int data) { return data * 360.0 / kStsResolution; }
 
-inline auto from_angle(const double angle) { return static_cast<int>(angle * kStsResolution / 360.0); }
+inline auto sts_from_angle(const double angle) { return static_cast<int>(angle * kStsResolution / 360.0); }
 
-inline auto to_radians(const int data) { return data * 2.0 * std::numbers::pi / kStsResolution; }
+inline auto sts_to_radians(const int data) { return data * 2.0 * std::numbers::pi / kStsResolution; }
 
-inline auto from_radians(const double angle) {
+inline auto sts_from_radians(const double angle) {
   return static_cast<int>(angle * kStsResolution / (2.0 * std::numbers::pi));
 }
+
+inline auto sc_to_angle(const int data) { return data * 360.0 / kScResolution; }
+
+inline auto sc_from_angle(const double angle) { return static_cast<int>(angle * kScResolution / 360.0); }
+
+inline auto sc_to_radians(const int data) { return data * 2.0 * std::numbers::pi / kScResolution; }
+
+inline auto sc_from_radians(const double angle) {
+  return std::clamp(static_cast<int>(angle * kScResolution / (2.0 * std::numbers::pi)), 20, 1000);
+}
+
 
 inline auto encode_signed_value(int position) {
   return position < 0 ? (-position | (1 << 15)) :  // Set MSB for negative
@@ -56,6 +72,18 @@ inline void to_sts(uint8_t* const data_low, uint8_t* const data_high, const int 
 // 8-bit numbers are combined into a 16-bit number
 // data_low is the low bit, data_high is the high bit
 inline int from_sts(const WordBytes word) { return ((word.high << 8) + word.low); }
+
+inline void to_sc(uint8_t* const data_low, uint8_t* const data_high, const int data) {
+  // bits flipped, wrt STS series.
+  *data_high = (data & 0xff);
+  *data_low = (data >> 8);
+}
+
+inline int from_sc(const WordBytes word) { 
+  // bits flipped, wrt STS series.
+  return ((word.low << 8) + word.high); 
+}
+
 
 inline static constexpr uint8_t kInstructionPing = 0x01;
 inline static constexpr uint8_t kInstructionRead = 0x02;

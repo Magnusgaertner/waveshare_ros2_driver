@@ -45,6 +45,7 @@ class WaveshareHardwareInterface : public hardware_interface::SystemInterface {
   std::vector<InterfaceData> actuator_interfaces_;
 
   std::vector<uint8_t> servo_ids_;
+  std::vector<bool> is_sts_;
   std::vector<int> servo_offsets_;
   std::unique_ptr<waveshare_hardware_interface::CommunicationProtocol> communication_protocol_;
 };

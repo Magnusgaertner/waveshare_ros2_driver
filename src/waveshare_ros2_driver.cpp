@@ -1,6 +1,7 @@
 #include <fmt/ranges.h>
 
 #include <algorithm>
+#include <cstddef>
 #include <hardware_interface/types/hardware_interface_return_values.hpp>
 #include <hardware_interface/types/hardware_interface_type_values.hpp>
 #include <range/v3/range/conversion.hpp>
@@ -215,9 +216,18 @@ CallbackReturn WaveshareHardwareInterface::on_init(const hardware_interface::Har
 
   // TODO(all): Support other series
   if (ranges::any_of(js,
-                     [](const auto& series) { return series != waveshare_hardware_interface::ModelSeries::kSts; })) {
+                     [](const auto& series) { 
+                      return series != waveshare_hardware_interface::ModelSeries::kSts && series != waveshare_hardware_interface::ModelSeries::kScs; })) {
     ERROR("Only STS series is supported");
     return CallbackReturn::ERROR;
+  }
+
+  // fill std::vector<bool> is_sts_
+  is_sts_ = ranges::views::transform(js, [](const auto& series) { return series == waveshare_hardware_interface::ModelSeries::kSts; }) |
+            ranges::to<std::vector<bool>>();
+  // print info about is_sts_
+  for (bool sts : is_sts_) {
+    INFO("Is STS: %d", sts);
   }
 
   return CallbackReturn::SUCCESS;
@@ -258,35 +268,62 @@ hardware_interface::return_type WaveshareHardwareInterface::read(const rclcpp::T
   // Read from hardware
   std::vector<std::array<uint8_t, 4>> data;
   data.reserve(servo_ids_.size());
-  if (auto result = communication_protocol_->sync_read(servo_ids_, SMS_STS_PRESENT_POSITION_L, &data); !result) {
-    ERROR("Read failed: %s", result.error().c_str());
-    return hardware_interface::return_type::ERROR;
+  // disable sync read for now. 
+  // if (auto result = communication_protocol_->sync_read(servo_ids_, SMS_STS_PRESENT_POSITION_L, &data); !result) {
+  //   ERROR("Read failed: %s", result.error().c_str());
+  //   return hardware_interface::return_type::ERROR;
+  // }
+
+  // read one by one instead (sc series only supports this mode. sts series supports sync read)
+  for (size_t i = 0; i < servo_ids_.size(); ++i) {
+    const auto id = servo_ids_[i];
+    // use and then to push back the result to data
+    std::array<uint8_t, 4> buffer{};
+    communication_protocol_->read(id, SMS_STS_PRESENT_POSITION_L, &buffer);
+    data.push_back(buffer);
   }
 
   // Update actuator states from hardware readings
   for (size_t i = 0; i < data.size(); ++i) {
-    actuator_interfaces_[i].state_ = waveshare_hardware_interface::to_radians(
+    if(is_sts_[i]){ // sts series
+      actuator_interfaces_[i].state_ = waveshare_hardware_interface::sts_to_radians(
         waveshare_hardware_interface::from_sts(
             waveshare_hardware_interface::WordBytes{.low = data[i][0], .high = data[i][1]}) -
         servo_offsets_[i]);
-    actuator_interfaces_[i].velocity_ = waveshare_hardware_interface::to_radians(waveshare_hardware_interface::from_sts(
+    actuator_interfaces_[i].velocity_ = waveshare_hardware_interface::sts_to_radians(waveshare_hardware_interface::from_sts(
         waveshare_hardware_interface::WordBytes{.low = data[i][2], .high = data[i][3]}));
+
+    // for now map directly to joint state
+    joint_interfaces_[i].state_ = actuator_interfaces_[i].state_;
+    joint_interfaces_[i].velocity_ = actuator_interfaces_[i].velocity_;
+    } else {
+      actuator_interfaces_[i].state_ = waveshare_hardware_interface::sc_to_radians(
+        waveshare_hardware_interface::from_sc(
+            waveshare_hardware_interface::WordBytes{.low = data[i][0], .high = data[i][1]}) -
+        servo_offsets_[i]);
+    actuator_interfaces_[i].velocity_ = waveshare_hardware_interface::sc_to_radians(waveshare_hardware_interface::from_sc(
+        waveshare_hardware_interface::WordBytes{.low = data[i][2], .high = data[i][3]}));
+
+    // for now map directly to joint state
+    joint_interfaces_[i].state_ = actuator_interfaces_[i].state_;
+    joint_interfaces_[i].velocity_ = actuator_interfaces_[i].velocity_;
+    }
 
     // Transmission passthrough
     actuator_interfaces_[i].transmission_passthrough_ = actuator_interfaces_[i].state_;
     actuator_interfaces_[i].transmission_passthrough_velocity_ = actuator_interfaces_[i].velocity_;
   }
 
-  // Process transmissions to update joint states
-  for (auto& transmission : transmissions_) {
-    transmission->actuator_to_joint();
-  }
+  // // Process transmissions to update joint states
+  // for (auto& transmission : transmissions_) {
+  //   transmission->actuator_to_joint();
+  // }
 
-  // Update joint states from transmission results
-  for (auto& joint : joint_interfaces_) {
-    joint.state_ = joint.transmission_passthrough_;
-    joint.velocity_ = joint.transmission_passthrough_velocity_;
-  }
+  // // Update joint states from transmission results
+  // for (auto& joint : joint_interfaces_) {
+  //   joint.state_ = joint.transmission_passthrough_;
+  //   joint.velocity_ = joint.transmission_passthrough_velocity_;
+  // }
 
   return hardware_interface::return_type::OK;
 }
@@ -297,22 +334,33 @@ hardware_interface::return_type WaveshareHardwareInterface::write(const rclcpp::
   // Update transmission input from joint commands
   for_each(joint_interfaces_, [](auto& joint) { joint.transmission_passthrough_ = joint.command_; });
   // Process transmissions
-  for_each(transmissions_, [](auto& transmission) { transmission->joint_to_actuator(); });
+  // for_each(transmissions_, [](auto& transmission) { transmission->joint_to_actuator(); });
   // Update actuator commands from transmission results
-  for_each(actuator_interfaces_, [](auto& actuator) { actuator.command_ = actuator.transmission_passthrough_; });
+  // for_each(actuator_interfaces_, [](auto& actuator) { actuator.command_ = actuator.transmission_passthrough_; });
 
   // Convert actuator commands to hardware positions
   // todo velocity and acceleration support?
   std::vector<int> positions;
   positions.reserve(servo_ids_.size());
   for (size_t i = 0; i < actuator_interfaces_.size(); ++i) {
-    positions.push_back(waveshare_hardware_interface::from_radians(actuator_interfaces_[i].command_) +
-                        servo_offsets_[i]);
+    if(is_sts_[i]){
+      // positions.push_back(waveshare_hardware_interface::sts_from_radians(actuator_interfaces_[i].command_) +
+      //                   servo_offsets_[i]);
+
+      positions.push_back(waveshare_hardware_interface::sts_from_radians(joint_interfaces_[i].command_) +
+                  servo_offsets_[i]);
+    } else {
+      // positions.push_back(waveshare_hardware_interface::sc_from_radians(actuator_interfaces_[i].command_) +
+      //                   servo_offsets_[i]);
+      positions.push_back(waveshare_hardware_interface::sc_from_radians(joint_interfaces_[i].command_) +
+                  servo_offsets_[i]);
+    }
   }
 
   // Write to hardware
   const auto write_result =
       communication_protocol_->sync_write_position(servo_ids_,
+                                                   is_sts_, 
                                                    positions,
                                                    std::vector(servo_ids_.size(), 2400),  // speed
                                                    std::vector(servo_ids_.size(), 50));   // acceleration

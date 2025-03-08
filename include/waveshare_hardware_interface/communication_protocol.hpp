@@ -32,8 +32,12 @@ class CommunicationProtocol {
 
   Result write_position(uint8_t id, int position, int speed, int acceleration);
 
-  // From User Manual: The real-time performance of this command is higher. A SYNC WRITE command can modify the contents
-  // of control tables of multiple servos at one time, while the REG WRITE+ACTION command is done step by step.
+  // From User Manual: 
+  // The real-time performance of this command is higher. 
+  // A SYNC WRITE command can modify the contents
+  // of control tables of multiple servos at one time, 
+  // while the REG WRITE+ACTION command is done step by step.
+  // send N bytes to each servo of the servo id list, 
   template <std::size_t N>
   Result sync_write(const std::vector<uint8_t>& ids,
                     const uint8_t memory_address,
@@ -76,10 +80,12 @@ class CommunicationProtocol {
   /// TODO: Should I create a struct??
   /// TOOD: Should I make speed/acceleration optional?
   Result sync_write_position(const std::vector<uint8_t>& ids,
+                             const std::vector<bool>& is_sts,
                              const std::vector<int>& position,
                              const std::vector<int>& speed,
-                             const std::vector<int>& acceleration) {
-    if (ids.size() != position.size() || ids.size() != speed.size() || ids.size() != acceleration.size()) {
+                             const std::vector<int>& acceleration
+                             ) {
+    if (ids.size() != is_sts.size() || ids.size() != position.size() || ids.size() != speed.size() || ids.size() != acceleration.size()) {
       return tl::make_unexpected(
           fmt::format("Sizes of IDs, position, speed, and acceleration must be the same - ids[{}], position[{}], "
                       "speed[{}], acceleration[{}]",
@@ -92,20 +98,41 @@ class CommunicationProtocol {
     buffer.resize(ids.size());
     for (size_t i = 0; i < ids.size(); ++i) {
       buffer[i][0] = acceleration[i];
-      to_sts(&buffer[i][1], &buffer[i][2], encode_signed_value(position[i]));
-      to_sts(&buffer[i][3], &buffer[i][4], 0);  // Time
-      to_sts(&buffer[i][5], &buffer[i][6], speed[i]);
+      if(is_sts[i]){
+        // sts ord
+        to_sts(&buffer[i][1], &buffer[i][2], encode_signed_value(position[i]));
+        to_sts(&buffer[i][3], &buffer[i][4], 0);  // Time
+        to_sts(&buffer[i][5], &buffer[i][6], speed[i]);
+      }else{
+        to_sc(&buffer[i][1], &buffer[i][2], encode_signed_value(position[i]));
+        to_sc(&buffer[i][3], &buffer[i][4], 0);  // Time
+        to_sc(&buffer[i][5], &buffer[i][6], speed[i]);
+      }    
     }
+    // hidden assumption, sc and sts servos have the same memory address for position, speed, and acceleration
+    // todo: cs servos do not have a memory address 41, but we should still be able to write something
+    // for acceleration values (unused for sc servos)
     return sync_write(ids, SMS_STS_ACC, buffer);
   }
 
-  Result reg_write_position(const uint8_t id, const int position, const int speed, const int acceleration) {
-    std::array<uint8_t, 7> buffer{};
-    buffer[0] = acceleration;
-    to_sts(&buffer[1], &buffer[2], encode_signed_value(position));
-    to_sts(&buffer[3], &buffer[4], 0);  // Time
-    to_sts(&buffer[5], &buffer[6], encode_signed_value(speed));
-    return reg_write(id, SMS_STS_ACC, buffer);
+  Result reg_write_position(const uint8_t id, const bool is_sts, const int position, const int speed, const int acceleration) {
+
+    if(is_sts){ // sts series
+      std::array<uint8_t, 7> buffer{};
+      buffer[0] = acceleration;
+      to_sts(&buffer[1], &buffer[2], encode_signed_value(position));
+      to_sts(&buffer[3], &buffer[4], 0);  // Time
+      to_sts(&buffer[5], &buffer[6], speed);
+      return reg_write(id, SMS_STS_ACC, buffer);
+    }
+    // sc series. 
+    // cant use acceleration, thus only write 6 bytes. 
+    std::array<uint8_t, 6> buffer{};
+    to_sc(&buffer[0], &buffer[1], encode_signed_value(position));
+    to_sc(&buffer[2], &buffer[3], 0);  // Time
+    to_sc(&buffer[4], &buffer[5], speed);
+    // goal address for sts and sc are the same
+    return reg_write(id, SMS_STS_GOAL_POSITION_L, buffer);
   }
 
   template <std::size_t N>
