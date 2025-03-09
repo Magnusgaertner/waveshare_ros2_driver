@@ -17,6 +17,7 @@ using CallbackReturn = rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface
 
 class WaveshareHardwareInterface : public hardware_interface::SystemInterface {
  public:
+  using ServoID = waveshare_hardware_interface::CommunicationProtocol::ServoID;
   CallbackReturn on_init(const hardware_interface::HardwareInfo& info) override;
   std::vector<hardware_interface::StateInterface> export_state_interfaces() override;
   std::vector<hardware_interface::CommandInterface> export_command_interfaces() override;
@@ -44,8 +45,7 @@ class WaveshareHardwareInterface : public hardware_interface::SystemInterface {
   // container for actuator interfaces
   std::vector<InterfaceData> actuator_interfaces_;
 
-  std::vector<uint8_t> servo_ids_;
-  std::vector<bool> is_sts_;
+  std::vector<ServoID> servo_ids_;
   std::vector<int> servo_offsets_;
   std::unique_ptr<waveshare_hardware_interface::CommunicationProtocol> communication_protocol_;
 };

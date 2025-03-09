@@ -27,6 +27,8 @@ namespace waveshare_ros2_driver {
 
 using hardware_interface::HW_IF_POSITION;
 using hardware_interface::HW_IF_VELOCITY;
+using ServoID = waveshare_hardware_interface::CommunicationProtocol::ServoID;
+
 WaveshareHardwareInterface::InterfaceData::InterfaceData(std::string name) : name_(std::move(name)) {}
 
 template <typename InterfaceT>
@@ -105,6 +107,83 @@ std::shared_ptr<transmission_interface::Transmission> configure_four_bar_linkage
   return transmission;
 }
 
+template <typename InterfaceData>
+CallbackReturn configure_transmissions(const hardware_interface::HardwareInfo& info_, // NOLINT
+                             std::vector<InterfaceData>& joint_interfaces_,
+                             std::vector<InterfaceData>& actuator_interfaces_,
+                             std::vector<std::shared_ptr<transmission_interface::Transmission>>& transmissions_) {
+
+  using std::shared_ptr;
+  using transmission_interface::ActuatorHandle;
+  using transmission_interface::FourBarLinkageTransmissionLoader;
+  using transmission_interface::JointHandle;
+  using transmission_interface::SimpleTransmissionLoader;
+  using transmission_interface::TransmissionLoader;
+
+  for (const auto& transmission_info : info_.transmissions) {
+    INFO("Loading transmission '%s'", transmission_info.name.c_str());
+    try {
+      if (transmission_info.type == "transmission_interface/SimpleTransmission") {
+        transmissions_.emplace_back(
+            configure_simple_transmission(transmission_info, joint_interfaces_, actuator_interfaces_));
+      } else if (transmission_info.type == "transmission_interface/FourBarLinkageTransmission") {
+        transmissions_.emplace_back(
+            configure_four_bar_linkage_transmission(transmission_info, joint_interfaces_, actuator_interfaces_));
+      } else {
+        FATAL("Transmission '%s' of type '%s' not supported",
+              transmission_info.name.c_str(),
+              transmission_info.type.c_str());
+        return CallbackReturn::ERROR;
+      }
+    } catch (const transmission_interface::TransmissionInterfaceException& exc) {
+      FATAL("Error configuring transmission '%s': %s", transmission_info.name.c_str(), exc.what());
+      return CallbackReturn::ERROR;
+    }
+  }
+  return CallbackReturn::SUCCESS;
+}
+
+// Fills servo_ids_[].is_sts. 
+CallbackReturn readModelSeries(std::vector<ServoID>& servo_ids_, // NOLINT
+                               std::unique_ptr<waveshare_hardware_interface::CommunicationProtocol>& communication_protocol_) {
+  // TODO(): Simplify implementation. 
+
+  // Read model series
+  const auto joint_model_series = servo_ids_ | ranges::views::transform([&](const auto id) {
+    return communication_protocol_->read_model_number(id)
+        .and_then(waveshare_hardware_interface::get_model_name)
+        .and_then(waveshare_hardware_interface::get_model_series);
+  });                                
+  if (ranges::any_of(joint_model_series, [](const auto& series) { return !series.has_value(); })) {
+  ERROR("One of the joints has an error reading model series");
+  return CallbackReturn::ERROR;
+  }
+
+  const auto js = joint_model_series | ranges::views::transform([](const auto& series) { return series.value(); });
+  for (const auto& series : js) {
+  INFO("Joint series: %d", static_cast<int>(series));
+  }
+
+  // Check series compatibility
+  // TODO(all): Support other series
+  if (ranges::any_of(js, [](const auto& series) {
+  return series != waveshare_hardware_interface::ModelSeries::kSts &&
+  series != waveshare_hardware_interface::ModelSeries::kScs;
+  })) {
+  ERROR("Only STS series is supported");
+  return CallbackReturn::ERROR;
+  }
+
+  // fill servo_ids_[].is_sts
+  auto model_series = js | ranges::to<std::vector>();
+  for (size_t i = 0; i < servo_ids_.size(); i++) {
+    servo_ids_[i].is_sts = (model_series[i] == waveshare_hardware_interface::ModelSeries::kSts);
+    INFO("Joint %zu is STS: %d", i, servo_ids_[i].is_sts);
+  }
+
+  return CallbackReturn::SUCCESS;
+}
+
 CallbackReturn WaveshareHardwareInterface::on_init(const hardware_interface::HardwareInfo& info) {
   if (hardware_interface::SystemInterface::on_init(info) != CallbackReturn::SUCCESS) {
     return CallbackReturn::ERROR;
@@ -134,41 +213,20 @@ CallbackReturn WaveshareHardwareInterface::on_init(const hardware_interface::Har
       std::make_unique<waveshare_hardware_interface::CommunicationProtocol>(std::move(serial_port));
 
   // Initialize servo ram data
-  servo_ids_.resize(info_.joints.size(), 0);
-  servo_offsets_.resize(info_.joints.size(), 0);
+  servo_ids_.resize(info_.joints.size(), {0, true}); // needed as member?
+  servo_offsets_.resize(info_.joints.size(), 0); // needed as member? 
 
   // Load transmissions
-  using std::shared_ptr;
-  using transmission_interface::ActuatorHandle;
-  using transmission_interface::FourBarLinkageTransmissionLoader;
-  using transmission_interface::JointHandle;
-  using transmission_interface::SimpleTransmissionLoader;
-  using transmission_interface::TransmissionLoader;
-
-  for (const auto& transmission_info : info_.transmissions) {
-    INFO("Loading transmission '%s'", transmission_info.name.c_str());
-    try {
-      if (transmission_info.type == "transmission_interface/SimpleTransmission") {
-        transmissions_.emplace_back(
-            configure_simple_transmission(transmission_info, joint_interfaces_, actuator_interfaces_));
-      } else if (transmission_info.type == "transmission_interface/FourBarLinkageTransmission") {
-        transmissions_.emplace_back(
-            configure_four_bar_linkage_transmission(transmission_info, joint_interfaces_, actuator_interfaces_));
-      } else {
-        FATAL("Transmission '%s' of type '%s' not supported",
-              transmission_info.name.c_str(),
-              transmission_info.type.c_str());
-        return CallbackReturn::ERROR;
-      }
-    } catch (const transmission_interface::TransmissionInterfaceException& exc) {
-      FATAL("Error configuring transmission '%s': %s", transmission_info.name.c_str(), exc.what());
-      return CallbackReturn::ERROR;
-    }
+  auto configure_transmission_result = configure_transmissions(info_, joint_interfaces_, actuator_interfaces_, transmissions_);
+  if (configure_transmission_result != CallbackReturn::SUCCESS) {
+    return configure_transmission_result;
   }
 
+  // For each joint
   for (uint i = 0; i < info_.joints.size(); i++) {
     const auto& joint_params = info_.joints[i].parameters;
-    servo_ids_[i] = std::stoi(joint_params.at("id"));
+    // configure id and offset. 
+    servo_ids_[i].id = std::stoi(joint_params.at("id"));
     servo_offsets_[i] = [&] {
       if (const auto offset_it = joint_params.find("offset"); offset_it != joint_params.end()) {
         return std::stoi(offset_it->second);
@@ -178,8 +236,9 @@ CallbackReturn WaveshareHardwareInterface::on_init(const hardware_interface::Har
                   info_.joints[i].name.c_str());
       return 0;
     }();
-    INFO("Joint '%s' -> id: %d, offset: %d", info_.joints[i].name.c_str(), servo_ids_[i], servo_offsets_[i]);
+    INFO("Joint '%s' -> id: %d, offset: %d", info_.joints[i].name.c_str(), servo_ids_[i].id, servo_offsets_[i]);
 
+    // and p, i, d coefficients
     for (const auto& [parameter_name, address] : {std::pair{"p_cofficient", SMS_STS_P_COEF},
                                                   {"d_cofficient", SMS_STS_D_COEF},
                                                   {"i_cofficient", SMS_STS_I_COEF}}) {
@@ -194,43 +253,8 @@ CallbackReturn WaveshareHardwareInterface::on_init(const hardware_interface::Har
     }
   }
 
-  const auto joint_model_series = servo_ids_ | ranges::views::transform([&](const auto id) {
-                                    return communication_protocol_->read_model_number(id)
-                                        .and_then(waveshare_hardware_interface::get_model_name)
-                                        .and_then(waveshare_hardware_interface::get_model_series);
-                                  });
-
-  if (ranges::any_of(joint_model_series, [](const auto& series) { return !series.has_value(); })) {
-    ERROR("One of the joints has an error reading model series");
-    return CallbackReturn::ERROR;
-  }
-
-  const auto js = joint_model_series | ranges::views::transform([](const auto& series) { return series.value(); });
-
-  // print the series of each joint
-  for (const auto& series : js) {
-    INFO("Joint series: %d", static_cast<int>(series));
-  }
-
-  // TODO(all): Support other series
-  if (ranges::any_of(js, [](const auto& series) {
-        return series != waveshare_hardware_interface::ModelSeries::kSts &&
-               series != waveshare_hardware_interface::ModelSeries::kScs;
-      })) {
-    ERROR("Only STS series is supported");
-    return CallbackReturn::ERROR;
-  }
-
-  // fill std::vector<bool> is_sts_
-  is_sts_ = ranges::views::transform(
-                js, [](const auto& series) { return series == waveshare_hardware_interface::ModelSeries::kSts; }) |
-            ranges::to<std::vector<bool>>();
-  // print info about is_sts_
-  for (bool sts : is_sts_) {
-    INFO("Is STS: %d", sts);
-  }
-
-  return CallbackReturn::SUCCESS;
+  // Read model series
+  return readModelSeries(servo_ids_, communication_protocol_);
 }
 
 std::vector<hardware_interface::StateInterface> WaveshareHardwareInterface::export_state_interfaces() {
@@ -268,6 +292,8 @@ hardware_interface::return_type WaveshareHardwareInterface::read(const rclcpp::T
   // Read from hardware
   std::vector<std::array<uint8_t, 4>> data;
   data.reserve(servo_ids_.size());
+
+  
   // disable sync read for now.
   // if (auto result = communication_protocol_->sync_read(servo_ids_, SMS_STS_PRESENT_POSITION_L, &data); !result) {
   //   ERROR("Read failed: %s", result.error().c_str());
@@ -281,23 +307,25 @@ hardware_interface::return_type WaveshareHardwareInterface::read(const rclcpp::T
     communication_protocol_->read(id, SMS_STS_PRESENT_POSITION_L, &buffer);
     data.push_back(buffer);
   }
+
+
   using namespace waveshare_hardware_interface; // NOLINT
   // Update actuator states from hardware readings
   for (size_t i = 0; i < data.size(); ++i) {
-    if (is_sts_[i]) {  // sts series
+    if (servo_ids_[i].is_sts) {  // sts series
       actuator_interfaces_[i].state_ =
-          sts_to_radians(from_servo(WordBytes{.low = data[i][0], .high = data[i][1]}, is_sts_[i]) - servo_offsets_[i]);
+          sts_to_radians(from_servo(WordBytes{.low = data[i][0], .high = data[i][1]}, servo_ids_[i].is_sts) - servo_offsets_[i]);
       actuator_interfaces_[i].velocity_ =
-          sts_to_radians(from_servo(WordBytes{.low = data[i][2], .high = data[i][3]}, is_sts_[i]));
+          sts_to_radians(from_servo(WordBytes{.low = data[i][2], .high = data[i][3]}, servo_ids_[i].is_sts));
 
       // for now map directly to joint state
       joint_interfaces_[i].state_ = actuator_interfaces_[i].state_;
       joint_interfaces_[i].velocity_ = actuator_interfaces_[i].velocity_;
     } else {
       actuator_interfaces_[i].state_ = 
-      sc_to_radians(from_servo(WordBytes{.low = data[i][0], .high = data[i][1]}, is_sts_[i]) - servo_offsets_[i]);
+      sc_to_radians(from_servo(WordBytes{.low = data[i][0], .high = data[i][1]}, servo_ids_[i].is_sts) - servo_offsets_[i]);
     actuator_interfaces_[i].velocity_ = 
-    sc_to_radians(from_servo(WordBytes{.low = data[i][2], .high = data[i][3]}, is_sts_[i]));
+    sc_to_radians(from_servo(WordBytes{.low = data[i][2], .high = data[i][3]}, servo_ids_[i].is_sts));
 
     // for now map directly to joint state
     joint_interfaces_[i].state_ = actuator_interfaces_[i].state_;
@@ -340,8 +368,8 @@ hardware_interface::return_type WaveshareHardwareInterface::write(const rclcpp::
   commands.reserve(servo_ids_.size());
   for (size_t i = 0; i < actuator_interfaces_.size(); ++i) {
     ServoCommandData command_data;
-    command_data.id = {.id=servo_ids_[i], .is_sts=is_sts_[i]};
-    if (is_sts_[i]) {
+    command_data.id = {.id=servo_ids_[i], .is_sts=servo_ids_[i].is_sts};
+    if (servo_ids_[i].is_sts) {
       command_data.position = waveshare_hardware_interface::sts_from_radians(joint_interfaces_[i].command_) + servo_offsets_[i];
     } else {
       command_data.position = waveshare_hardware_interface::sc_from_radians(joint_interfaces_[i].command_) + servo_offsets_[i];
