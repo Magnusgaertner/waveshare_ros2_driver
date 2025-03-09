@@ -63,14 +63,14 @@ target_link_libraries(communication_protocol
 )
 set_target_properties(communication_protocol PROPERTIES VERSION ${${PROJECT_NAME}_VERSION})
 
-# add_executable(
-#   demo
-#   examples/demo.cpp
-# )
-# target_link_libraries(demo
-#   serial_port
-#   communication_protocol
-# )
+add_executable(
+  demo
+  examples/demo.cpp
+)
+target_link_libraries(demo
+  serial_port
+  communication_protocol
+)
 
 add_library(
   ${PROJECT_NAME}

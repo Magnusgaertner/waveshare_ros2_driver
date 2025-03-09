@@ -63,27 +63,22 @@ struct WordBytes {
 
 // Split a 16-bit number into two 8-bit numbers
 // data_low is the low bit, data_high is the high bit
-inline void to_sts(uint8_t* const data_low, uint8_t* const data_high, const int data) {
-  // Only works with STS models
-  *data_high = (data >> 8);
-  *data_low = (data & 0xff);
+// TODO(): rename is_sts. 
+inline void to_servo(uint8_t* const data_low, uint8_t* const data_high, const int data, bool is_sts) {
+  if (is_sts) {
+    *data_high = (data >> 8);
+    *data_low = (data & 0xff);
+  } else {
+    *data_high = (data & 0xff);
+    *data_low = (data >> 8);
+  }
 }
 
 // 8-bit numbers are combined into a 16-bit number
 // data_low is the low bit, data_high is the high bit
-inline int from_sts(const WordBytes word) { return ((word.high << 8) + word.low); }
-
-inline void to_sc(uint8_t* const data_low, uint8_t* const data_high, const int data) {
-  // bits flipped, wrt STS series.
-  *data_high = (data & 0xff);
-  *data_low = (data >> 8);
+inline int from_servo(const WordBytes word, bool is_sts) {
+  return is_sts ? ((word.high << 8) + word.low) : ((word.low << 8) + word.high);
 }
-
-inline int from_sc(const WordBytes word) { 
-  // bits flipped, wrt STS series.
-  return ((word.low << 8) + word.high); 
-}
-
 
 inline static constexpr uint8_t kInstructionPing = 0x01;
 inline static constexpr uint8_t kInstructionRead = 0x02;

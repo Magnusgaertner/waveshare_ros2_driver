@@ -11,10 +11,10 @@ namespace waveshare_hardware_interface {
 CommunicationProtocol::CommunicationProtocol(std::unique_ptr<SerialPort> serial_port)
     : serial_port_(std::move(serial_port)) {}
 
-Expected<int> CommunicationProtocol::read_word(const uint8_t id, const uint8_t memory_address) {
+Expected<int> CommunicationProtocol::read_word(const CommunicationProtocol::ServoID& id, const uint8_t memory_address) {
   std::array<uint8_t, 2> buffer{};
   return read(id, memory_address, &buffer).and_then([&]() -> Expected<int> {
-    return from_sts(WordBytes{.low = buffer[0], .high = buffer[1]});
+    return from_servo(WordBytes{.low = buffer[0], .high = buffer[1]}, id.is_sts);
   });
 }
 
@@ -81,22 +81,22 @@ Result CommunicationProtocol::ping(int id) {
   return {};
 }
 
-Result CommunicationProtocol::write_position(const uint8_t id, int position, int speed, const int acceleration) {
+Result CommunicationProtocol::write_position(const CommunicationProtocol::ServoID& id, int position, int speed, const int acceleration) {
   std::array<uint8_t, 7> buffer{};
   buffer[0] = acceleration;
-  to_sts(&buffer[1], &buffer[2], encode_signed_value(position));
-  to_sts(&buffer[3], &buffer[4], 0);
-  to_sts(&buffer[5], &buffer[6], encode_signed_value(speed));
+  to_servo(&buffer[1], &buffer[2], encode_signed_value(position), id.is_sts);
+  to_servo(&buffer[3], &buffer[4], 0, id.is_sts);
+  to_servo(&buffer[5], &buffer[6], encode_signed_value(speed), id.is_sts);
   return write(id, SMS_STS_ACC, buffer);
 }
 
-Expected<int> CommunicationProtocol::read_position(const uint8_t id) {
+Expected<int> CommunicationProtocol::read_position(const CommunicationProtocol::ServoID& id) {
   return read_word(id, SMS_STS_PRESENT_POSITION_L).and_then([](auto position) -> Expected<int> {
     return encode_signed_value(position);
   });
 }
 
-Expected<int> CommunicationProtocol::read_speed(const uint8_t id) {
+Expected<int> CommunicationProtocol::read_speed(const CommunicationProtocol::ServoID& id) {
   return read_word(id, SMS_STS_PRESENT_SPEED_L).and_then([](auto speed) -> Expected<int> {
     return encode_signed_value(speed);
   });
@@ -110,27 +110,17 @@ Result CommunicationProtocol::calbration_offset(const uint8_t id) {
   return write(id, SMS_STS_TORQUE_ENABLE, std::experimental::make_array(uint8_t{128}));
 }
 
-Result CommunicationProtocol::set_maximum_angle_limit(const uint8_t id, const int angle) {
+Result CommunicationProtocol::set_maximum_angle_limit(const CommunicationProtocol::ServoID& id, const int angle) {
   std::array<uint8_t, 2> buf{};
-  if (angle < 0) {
-    to_sts(buf.data(), &buf[1], 0);
-  } else if (angle > 4095) {
-    to_sts(buf.data(), &buf[1], 4095);
-  } else {
-    to_sts(buf.data(), &buf[1], angle);
-  }
+  // NOLINTNEXTLINE
+  to_servo(&buf[0], &buf[1], std::clamp(angle, 0, 4095), id.is_sts);
   return write(id, SMS_STS_MAX_ANGLE_LIMIT_L, buf);
 }
 
-Result CommunicationProtocol::set_minimum_angle_limit(const uint8_t id, const int angle) {
+Result CommunicationProtocol::set_minimum_angle_limit(const CommunicationProtocol::ServoID& id, const int angle) {
   std::array<uint8_t, 2> buf{};
-  if (angle < 0) {
-    to_sts(buf.data(), &buf[1], 0);
-  } else if (angle > 4095) {
-    to_sts(buf.data(), &buf[1], 4095);
-  } else {
-    to_sts(buf.data(), &buf[1], angle);
-  }
+  // NOLINTNEXTLINE
+  to_servo(&buf[0], &buf[1], std::clamp(angle, 0, 4095), id.is_sts);
   return write(id, SMS_STS_MIN_ANGLE_LIMIT_L, buf);
 }
 
@@ -146,5 +136,5 @@ Result CommunicationProtocol::reg_write_action(const uint8_t id) {
   return write_buffer(id, 0, kEmptyArray, kInstructionRegAction).and_then([&] { return read_response(id); });
 }
 
-Expected<int> CommunicationProtocol::read_model_number(uint8_t id) { return read_word(id, SMS_STS_MODEL_L); }
+Expected<int> CommunicationProtocol::read_model_number(uint8_t id) { return read_word({.id=id, .is_sts=true}, SMS_STS_MODEL_L); }
 }  // namespace waveshare_hardware_interface
